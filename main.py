@@ -1,77 +1,148 @@
-from tradelocker import TLAPI
 import threading
 from fastapi import FastAPI, Request
+from capitalcom import CapitalClient
 import uvicorn
-import argparse
 from libs import AsciiAlerts
-from libs.URLgenerator import *
+from libs.URLgenerator import generate_random_url
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import argparse
+import os
 
 app = FastAPI()
-lock = threading.Lock()
+clients = {}
+strategy_urls = {}
+LINKS_FILE = "webhook_links.txt"
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Add variables when starting")
-    parser.add_argument('--username', type=str, required=True, help='username/email')
-    parser.add_argument('--password', type=str, required=True, help='password')
-    parser.add_argument('--server', type=str, required=True, help='server')
-    parser.add_argument('--env', type=str, required=True, choices=['live', 'demo'], help='live/demo')
-    parser.add_argument('--url', type=str, default='/strategy', help='Optional URL, default is /strategy')
-    parser.add_argument('--acc_num', type=str, default='0', help='Optional account number')
-    parser.add_argument('--acc_id', type=str, default='0', help='Optional account ID')
-    parser.add_argument('--port', type=int, default=443, help='Port to run the application')
-    return parser.parse_args()
+class LoginRateLimitError(Exception):
+    pass
 
+# Retry login if the Capital.com API rate-limits us (HTTP 429)
+@retry(
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type(LoginRateLimitError)
+)
+def create_client(api_key, login, password, demo):
+    try:
+        return CapitalClient(
+            api_key=api_key,
+            login=login,
+            password=password,
+            demo=demo
+        )
+    except Exception as e:
+        if "429" in str(e):
+            print("Hit rate limit during login. Retrying...")
+            raise LoginRateLimitError()
+        raise e
 
-def handle_position_normal(tl, payload_list, lock):
-    with lock:
+# Main logic that runs for each webhook strategy call
+def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list: list[str]):
+    print(f"[Strategy {strategy_id}] Webhook received")
+    try:
         symbol_name = payload_list[0]
         direction = payload_list[1]
         mainLot = payload_list[2]
         takeprofit = int(payload_list[3])
         stoploss = int(payload_list[4])
+        action = payload_list[5]
         isInvert = payload_list[6]
-        balance = tl.get_account_state().get("projectedBalance")
 
+        balance = client.get_balance(raw=False)
         minilot, per = map(float, mainLot.split('/'))
         lot = round((balance / per) * minilot, 2)
 
-        print("Normal: Locked")
-        if payload_list[5] == "close":
+        if action == "close":
+            print(f"[Strategy {strategy_id}] Closing position on {symbol_name}")
+        elif action == "open":
+            if isInvert == "Invert":
+                direction = 'sell' if direction == 'buy' else 'buy'
+            print(f"[Strategy {strategy_id}] Opening {direction.upper()} on {symbol_name} with lot {lot}")
+        else:
+            print(f"[Strategy {strategy_id}] Unknown action: {action}")
 
+    except Exception as e:
+        print(f"[Strategy {strategy_id}] ERROR: {e}")
 
-        if payload_list[5] == "open":
-            if isInvert == "NonInvert":
-                order_direction = direction
-            elif isInvert == "Invert":
-                order_direction = 'sell' if direction == 'buy' else 'buy'
-            else:
-                raise ValueError("Invalid value for isInvert. Expected 'NonInvert' or 'Invert'.")
+# Register an endpoint in FastAPI dynamically for each strategy
+def register_strategy_endpoint(strategy_id: int, route_path: str, client: CapitalClient):
+    strategy_urls[strategy_id] = route_path
 
-
-        print("Normal: Unlocked")
-
-def main():
-    args = parse_args()
-    if args.env == "demo":
-
-
-    if args.url == "generate":
-        print(AsciiAlerts.RED + AsciiAlerts.ascii_art_url + AsciiAlerts.RESET)
-        args.url = generate_random_url()
-        print(args.url)
-
-    print(AsciiAlerts.GREEN + AsciiAlerts.ascii_art_hello + AsciiAlerts.RESET)
-
-
-
-    @app.post(args.url)
-    async def process_webhook(request: Request):
+    @app.post(route_path)
+    async def strategy_endpoint(request: Request, sid=strategy_id):
         payload_bytes = await request.body()
         payload_list = payload_bytes.decode().splitlines()
-        normal_thread = threading.Thread(target=handle_position_normal, args=(tl, payload_list, lock))
-        normal_thread.start()
+        thread = threading.Thread(target=handle_position_normal, args=(client, sid, payload_list))
+        thread.start()
+        return {"status": "received", "strategy": sid}
 
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+# Save generated or restored URLs to file
+def save_links_to_file(urls: list[str]):
+    with open(LINKS_FILE, "w") as f:
+        for url in urls:
+            f.write(url + "\n")
+
+# Load URLs from file if present
+def load_links_from_file() -> list[str]:
+    if not os.path.exists(LINKS_FILE):
+        return []
+    with open(LINKS_FILE, "r") as f:
+        return [line.strip() for line in f.readlines() if line.strip()]
+
+def main():
+    print(AsciiAlerts.GREEN + AsciiAlerts.ascii_art_hello + AsciiAlerts.RESET)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--Strategies", type=int, default=3, help="How many strategies to run")
+    parser.add_argument("--ForceGenerate", type=bool, default=False, help="Force generation of new URLs, overwriting file")
+    args = parser.parse_args()
+
+    api_key = "s8GuzswLCONYMQwY"
+    login = "wiktorjn@gmail.com"
+    password = "Demo1234!"
+    demo = True
+
+    routes = []
+
+    if args.ForceGenerate:
+        print(f"Force-generating {args.Strategies} new strategy URLs...")
+        routes = [generate_random_url() for _ in range(args.Strategies)]
+        save_links_to_file(routes)
+    else:
+        routes = load_links_from_file()
+        current_count = len(routes)
+
+        if current_count == 0:
+            print("No webhook links found in file.")
+            choice = input("Do you want to generate new ones? (Y/N): ").strip().lower()
+            if choice != "y":
+                print("Aborting. No links to restore.")
+                return
+            routes = [generate_random_url() for _ in range(args.Strategies)]
+            save_links_to_file(routes)
+
+        elif current_count < args.Strategies:
+            missing = args.Strategies - current_count
+            print(f"Adding {missing} missing strategy URL(s)...")
+            new_routes = [generate_random_url() for _ in range(missing)]
+            routes.extend(new_routes)
+            save_links_to_file(routes)
+
+        elif current_count > args.Strategies:
+            print(f"Found more links than requested ({current_count} > {args.Strategies}). Extra links will be ignored.")
+
+    # Register only the first N routes, where N = --Strategies
+    for i, route in enumerate(routes[:args.Strategies], start=1):
+        client = create_client(api_key, login, password, demo)
+        register_strategy_endpoint(i, route, client)
+        print(f"Strategy {i} registered.")
+
+    print(AsciiAlerts.RED + AsciiAlerts.ascii_art_url + AsciiAlerts.RESET)
+
+    for sid, url in strategy_urls.items():
+        print(f"Strategy {sid}: POST http://localhost:8080{url.lstrip()}")
+
+    uvicorn.run(app, host="0.0.0.0", port=8080)
 
 if __name__ == "__main__":
     main()
