@@ -42,7 +42,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
     print(f"[Strategy {strategy_id}] Webhook received")
     try:
         symbol_name = payload_list[0]
-        direction = payload_list[1]
+        direction = payload_list[1].upper()
         mainLot = payload_list[2]
         takeprofit = int(payload_list[3])
         stoploss = int(payload_list[4])

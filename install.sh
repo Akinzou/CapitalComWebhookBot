@@ -72,7 +72,7 @@ echo "Project dir: $PROJECT_DIR"
 echo "Start script: $START_SCRIPT"
 echo
 echo "To view the latest 200 logs with color:"
-echo "  journalctl -u $SERVICE_NAME -n 200 --output=cat --no-pager"
+echo "  journalctl -u $SERVICE_NAME -n 50 --output=cat --no-pager"
 echo
 echo "To follow logs live with color:"
-echo "  journalctl -u $SERVICE_NAME -n 200 -f --output=cat --no-pager"
+echo "  journalctl -u $SERVICE_NAME -n 50 -f --output=cat --no-pager"
