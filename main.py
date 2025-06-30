@@ -24,12 +24,14 @@ class LoginRateLimitError(Exception):
 )
 def create_client(api_key, login, password, demo):
     try:
-        return CapitalClient(
+        client = CapitalClient(
             api_key=api_key,
             login=login,
             password=password,
             demo=demo
         )
+        client.open_positions = {}  # {symbol_name: [deal_id, ...]}
+        return client
     except Exception as e:
         if "429" in str(e):
             print("Hit rate limit during login. Retrying...")
@@ -48,19 +50,51 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
         action = payload_list[5]
         isInvert = payload_list[6]
 
-        balance = client.get_balance(raw=False)
-        minilot, per = map(float, mainLot.split('/'))
-        lot = round((balance / per) * minilot, 2)
+        if not hasattr(client, "open_positions"):
+            client.open_positions = {}
 
         if action == "close":
-            print(f"[Strategy {strategy_id}] Closing position on {symbol_name}")
+            if symbol_name in client.open_positions and client.open_positions[symbol_name]:
+                deal_ids = client.open_positions[symbol_name]
+                print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
+                for deal_id in deal_ids:
+                    try:
+                        client.close_position_by_id(deal_id)
+                        print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
+                    except Exception as e:
+                        print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
+                client.open_positions[symbol_name] = []
+            else:
+                print(f"[Strategy {strategy_id}] No open positions recorded for {symbol_name} to close.")
+
         elif action == "open":
             if isInvert == "Invert":
-                direction = 'sell' if direction == 'buy' else 'buy'
-            print(f"[Strategy {strategy_id}] Opening {direction.upper()} on {symbol_name} with lot {lot}")
+                if direction == 'BUY':
+                    direction = 'SELL'
+                elif direction == 'SELL':
+                    direction = 'BUY'
+                else:
+                    raise ValueError(f"Unknown direction: {direction}")
+
+            balance = client.get_balance(raw=False)
+            minilot, per = map(float, mainLot.split('/'))
+            raw_lot = (balance / per) * minilot
+            lot = round(raw_lot, 3)
+
+            if lot < 0.001:
+                print(f"[Strategy {strategy_id}] Computed lot {lot} is too small, setting to 0.001")
+                lot = 0.001
+
+            try:
+                deal_id = client.open_forex_position(symbol_name, lot, direction, stoploss, takeprofit)
+                print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id} | SL: {stoploss} | TP: {takeprofit}")
+                if symbol_name not in client.open_positions:
+                    client.open_positions[symbol_name] = []
+                client.open_positions[symbol_name].append(deal_id)
+            except Exception as e:
+                print(f"[Strategy {strategy_id}] Failed to open position: {e}")
         else:
             print(f"[Strategy {strategy_id}] Unknown action: {action}")
-
     except Exception as e:
         print(f"[Strategy {strategy_id}] ERROR: {e}")
 
@@ -76,13 +110,11 @@ def register_strategy_endpoint(strategy_id: int, route_path: str, client: Capita
         thread.start()
         return {"status": "received", "strategy": sid}
 
-# Save generated or restored URLs to file
 def save_links_to_file(urls: list[str]):
     with open(LINKS_FILE, "w") as f:
         for url in urls:
             f.write(url + "\n")
 
-# Load URLs from file if present
 def load_links_from_file() -> list[str]:
     if not os.path.exists(LINKS_FILE):
         return []
@@ -93,15 +125,14 @@ def main():
     print(AsciiAlerts.GREEN + AsciiAlerts.ascii_art_hello + AsciiAlerts.RESET)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--Strategies", type=int, default=3, help="How many strategies to run")
+    parser.add_argument("--Strategies", type=int, default=1, help="How many strategies to run")
     parser.add_argument("--ForceGenerate", type=bool, default=False, help="Force generation of new URLs, overwriting file")
+    parser.add_argument("--api_key", required=True, help="Capital.com API key")
+    parser.add_argument("--login", required=True, help="Capital.com account login (email)")
+    parser.add_argument("--password", required=True, help="Capital.com account password")
+    parser.add_argument("--demo", type=bool, default=True, required=True, help="Use demo account: True or False")
+
     args = parser.parse_args()
-
-    api_key = "s8GuzswLCONYMQwY"
-    login = "wiktorjn@gmail.com"
-    password = "Demo1234!"
-    demo = True
-
     routes = []
 
     if args.ForceGenerate:
@@ -120,20 +151,17 @@ def main():
                 return
             routes = [generate_random_url() for _ in range(args.Strategies)]
             save_links_to_file(routes)
-
         elif current_count < args.Strategies:
             missing = args.Strategies - current_count
             print(f"Adding {missing} missing strategy URL(s)...")
             new_routes = [generate_random_url() for _ in range(missing)]
             routes.extend(new_routes)
             save_links_to_file(routes)
-
         elif current_count > args.Strategies:
             print(f"Found more links than requested ({current_count} > {args.Strategies}). Extra links will be ignored.")
 
-    # Register only the first N routes, where N = --Strategies
     for i, route in enumerate(routes[:args.Strategies], start=1):
-        client = create_client(api_key, login, password, demo)
+        client = create_client(args.api_key, args.login, args.password, args.demo)
         register_strategy_endpoint(i, route, client)
         print(f"Strategy {i} registered.")
 
@@ -141,7 +169,6 @@ def main():
 
     for sid, url in strategy_urls.items():
         print(f"Strategy {sid}: POST http://localhost:8080{url.lstrip()}")
-
     uvicorn.run(app, host="0.0.0.0", port=8080)
 
 if __name__ == "__main__":
