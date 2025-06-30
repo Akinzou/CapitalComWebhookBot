@@ -38,7 +38,6 @@ def create_client(api_key, login, password, demo):
             raise LoginRateLimitError()
         raise e
 
-# Main logic that runs for each webhook strategy call
 def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list: list[str]):
     print(f"[Strategy {strategy_id}] Webhook received")
     try:
@@ -98,7 +97,6 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
     except Exception as e:
         print(f"[Strategy {strategy_id}] ERROR: {e}")
 
-# Register an endpoint in FastAPI dynamically for each strategy
 def register_strategy_endpoint(strategy_id: int, route_path: str, client: CapitalClient):
     strategy_urls[strategy_id] = route_path
 
@@ -126,39 +124,28 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--Strategies", type=int, default=1, help="How many strategies to run")
-    parser.add_argument("--ForceGenerate", type=bool, default=False, help="Force generation of new URLs, overwriting file")
     parser.add_argument("--api_key", required=True, help="Capital.com API key")
     parser.add_argument("--login", required=True, help="Capital.com account login (email)")
     parser.add_argument("--password", required=True, help="Capital.com account password")
     parser.add_argument("--demo", type=bool, default=True, required=True, help="Use demo account: True or False")
+    parser.add_argument("--port", type=int, required=True, help="Port to run FastAPI server on")
 
     args = parser.parse_args()
-    routes = []
+    routes = load_links_from_file()
+    current_count = len(routes)
 
-    if args.ForceGenerate:
-        print(f"Force-generating {args.Strategies} new strategy URLs...")
+    if current_count == 0:
+        print(f"No links found — generating {args.Strategies} new strategy URL(s)...")
         routes = [generate_random_url() for _ in range(args.Strategies)]
         save_links_to_file(routes)
-    else:
-        routes = load_links_from_file()
-        current_count = len(routes)
-
-        if current_count == 0:
-            print("No webhook links found in file.")
-            choice = input("Do you want to generate new ones? (Y/N): ").strip().lower()
-            if choice != "y":
-                print("Aborting. No links to restore.")
-                return
-            routes = [generate_random_url() for _ in range(args.Strategies)]
-            save_links_to_file(routes)
-        elif current_count < args.Strategies:
-            missing = args.Strategies - current_count
-            print(f"Adding {missing} missing strategy URL(s)...")
-            new_routes = [generate_random_url() for _ in range(missing)]
-            routes.extend(new_routes)
-            save_links_to_file(routes)
-        elif current_count > args.Strategies:
-            print(f"Found more links than requested ({current_count} > {args.Strategies}). Extra links will be ignored.")
+    elif current_count < args.Strategies:
+        missing = args.Strategies - current_count
+        print(f"Found {current_count} link(s), generating {missing} more...")
+        new_routes = [generate_random_url() for _ in range(missing)]
+        routes.extend(new_routes)
+        save_links_to_file(routes)
+    elif current_count > args.Strategies:
+        print(f"Found more links than requested ({current_count} > {args.Strategies}). Extra links will be ignored.")
 
     for i, route in enumerate(routes[:args.Strategies], start=1):
         client = create_client(args.api_key, args.login, args.password, args.demo)
@@ -168,8 +155,9 @@ def main():
     print(AsciiAlerts.RED + AsciiAlerts.ascii_art_url + AsciiAlerts.RESET)
 
     for sid, url in strategy_urls.items():
-        print(f"Strategy {sid}: POST http://localhost:8080{url.lstrip()}")
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+        print(f"Strategy {sid}: POST http://localhost:{args.port}{url.lstrip()}")
+
+    uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 if __name__ == "__main__":
     main()
