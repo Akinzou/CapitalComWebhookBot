@@ -4,11 +4,10 @@
 SERVICE_NAME="CapitalWebhookBot"
 START_SCRIPT="start_webhook.sh"
 
-
 API_KEY="YOUR_API_KEY"
 LOGIN="your@email.com"
 PASSWORD="your_API_password"
-STRATEGIES="2"
+STRATEGIES="1"
 DEMO="True"
 PORT="8080"
 
@@ -52,7 +51,7 @@ After=network.target
 User=$(whoami)
 WorkingDirectory=$PROJECT_DIR
 ExecStart=$PROJECT_DIR/$START_SCRIPT
-Restart=always
+Restart=on-failure
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
