@@ -3,19 +3,23 @@
 # ===== CONFIGURATION =====
 SERVICE_NAME="CapitalWebhookBot"
 START_SCRIPT="start_webhook.sh"
-
-
-API_KEY="YOUR_API_KEY"
-LOGIN="your@email.com"
-PASSWORD="your_API_password"
-STRATEGIES="2"
-DEMO="True"
-PORT="8080"
-
 PYTHON_BIN="python3"
 
 # ===== PROJECT DIRECTORY =====
 PROJECT_DIR="$(cd "$(dirname "$0")"; pwd)"
+
+# ===== INTERACTIVE INPUT =====
+read -s -p "Enter API Key: " API_KEY
+echo
+read -p "Enter login (email): " LOGIN
+read -s -p "Enter password: " PASSWORD
+echo
+read -p "Number of strategies [default: 1]: " STRATEGIES
+STRATEGIES=${STRATEGIES:-1}
+read -p "Use demo account? [True/False, default: True]: " DEMO
+DEMO=${DEMO:-True}
+read -p "Port to listen on [default: 8080]: " PORT
+PORT=${PORT:-8080}
 
 # ===== INSTALL DEPENDENCIES =====
 echo "Installing Python dependencies from requirements.txt..."
@@ -52,7 +56,7 @@ After=network.target
 User=$(whoami)
 WorkingDirectory=$PROJECT_DIR
 ExecStart=$PROJECT_DIR/$START_SCRIPT
-Restart=always
+Restart=on-failure
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
@@ -67,12 +71,13 @@ sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
 
 # ===== DONE =====
+echo
 echo "Service '$SERVICE_NAME' has been installed and started."
 echo "Project dir: $PROJECT_DIR"
 echo "Start script: $START_SCRIPT"
 echo
-echo "To view the latest 200 logs with color:"
+echo "To view the latest 50 logs:"
 echo "  journalctl -u $SERVICE_NAME -n 50 --output=cat --no-pager"
 echo
-echo "To follow logs live with color:"
+echo "To follow logs live:"
 echo "  journalctl -u $SERVICE_NAME -n 50 -f --output=cat --no-pager"
