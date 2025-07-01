@@ -61,7 +61,7 @@ These arguments are passed automatically by `install.sh`:
 |----------------|--------------------------------------------------|
 | `--api_key`     | Your Capital.com API key                        |
 | `--login`       | Your Capital.com email                          |
-| `--password`    | Your Capital.com password                       |
+| `--password`    | Your Capital.com API password                   |
 | `--demo`        | `True` for demo account, `False` for real       |
 | `--Strategies`  | Number of strategy endpoints (webhooks)         |
 | `--port`        | Server port to bind to (default: `8080`)        |
