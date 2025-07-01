@@ -13,7 +13,7 @@ It is designed to run as a background service on Linux (including WSL) using `sy
 
 - Handles multiple webhook strategies
 - Opens/closes positions via Capital.com API
-- Retry on login rate limits (HTTP 429)
+- Retry on rate limits (HTTP 429)
 - Automatically registers systemd service
 - Logs via `journalctl`
 - Interactive installer
