@@ -53,7 +53,7 @@ The script will:
 
 ---
 
-## ⚙️ Command-line Arguments (`main.py`)
+##  Command-line Arguments (`main.py`)
 
 These arguments are passed automatically by `install.sh`:
 
@@ -68,7 +68,7 @@ These arguments are passed automatically by `install.sh`:
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 CapitalWebhookBot/
@@ -83,7 +83,7 @@ CapitalWebhookBot/
 
 ---
 
-## 🛠 Service Management (systemd)
+##  Service Management (systemd)
 
 | Action           | Command                                      |
 |------------------|----------------------------------------------|
@@ -96,7 +96,7 @@ CapitalWebhookBot/
 
 ---
 
-## 📄 Viewing Logs
+##  Viewing Logs
 
 Show the latest logs:
 
