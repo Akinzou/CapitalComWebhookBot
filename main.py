@@ -4,7 +4,7 @@ from capitalcom import CapitalClient
 import uvicorn
 from libs import AsciiAlerts
 from libs.URLgenerator import generate_random_url
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
 import argparse
 import os
 
@@ -16,10 +16,12 @@ LINKS_FILE = "webhook_links.txt"
 class LoginRateLimitError(Exception):
     pass
 
-# Retry login if the Capital.com API rate-limits us (HTTP 429)
+class RateLimitError(Exception):
+    pass
+
 @retry(
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(5),
+    wait=wait_fixed(1),
+    stop=stop_after_attempt(10),
     retry=retry_if_exception_type(LoginRateLimitError)
 )
 def create_client(api_key, login, password, demo):
@@ -37,6 +39,34 @@ def create_client(api_key, login, password, demo):
             print("Hit rate limit during login. Retrying...")
             raise LoginRateLimitError()
         raise e
+
+@retry(
+    wait=wait_fixed(1),
+    stop=stop_after_attempt(10),
+    retry=retry_if_exception_type(RateLimitError)
+)
+def safe_open_position(client: CapitalClient, symbol: str, lot: float, direction: str, sl: int, tp: int) -> str:
+    try:
+        return client.open_forex_position(symbol, lot, direction, sl, tp)
+    except Exception as e:
+        if "429" in str(e):
+            print(f"[RETRY] Rate limited while opening position for {symbol}. Retrying...")
+            raise RateLimitError()
+        raise
+
+@retry(
+    wait=wait_fixed(1),
+    stop=stop_after_attempt(10),
+    retry=retry_if_exception_type(RateLimitError)
+)
+def safe_close_position(client: CapitalClient, deal_id: str):
+    try:
+        client.close_position_by_id(deal_id)
+    except Exception as e:
+        if "429" in str(e):
+            print(f"[RETRY] Rate limited while closing deal {deal_id}. Retrying...")
+            raise RateLimitError()
+        raise
 
 def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list: list[str]):
     print(f"[Strategy {strategy_id}] Webhook received")
@@ -58,7 +88,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
                 print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
                 for deal_id in deal_ids:
                     try:
-                        client.close_position_by_id(deal_id)
+                        safe_close_position(client, deal_id)
                         print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
                     except Exception as e:
                         print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
@@ -85,7 +115,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
                 lot = 0.001
 
             try:
-                deal_id = client.open_forex_position(symbol_name, lot, direction, stoploss, takeprofit)
+                deal_id = safe_open_position(client, symbol_name, lot, direction, stoploss, takeprofit)
                 print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id} | SL: {stoploss} | TP: {takeprofit}")
                 if symbol_name not in client.open_positions:
                     client.open_positions[symbol_name] = []
