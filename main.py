@@ -1,4 +1,6 @@
 import threading
+import time
+
 from fastapi import FastAPI, Request
 from capitalcom import CapitalClient
 import uvicorn
@@ -9,9 +11,15 @@ import argparse
 import os
 
 app = FastAPI()
+lock = threading.Lock()
 clients = {}
 strategy_urls = {}
 LINKS_FILE = "webhook_links.txt"
+
+# === GLOBAL BALANCE STATE ===
+GLOBAL_BALANCE = 0.0
+_last_balance_check = 0
+balance_lock = threading.Lock()
 
 class LoginRateLimitError(Exception):
     pass
@@ -32,13 +40,27 @@ def create_client(api_key, login, password, demo):
             password=password,
             demo=demo
         )
-        client.open_positions = {}  # {symbol_name: [deal_id, ...]}
+        client.open_positions = {}
         return client
     except Exception as e:
         if "429" in str(e):
             print("Hit rate limit during login. Retrying...")
             raise LoginRateLimitError()
         raise e
+
+def refresh_balance_periodically(client: CapitalClient):
+    global GLOBAL_BALANCE, _last_balance_check
+    while True:
+        try:
+            with balance_lock:
+                old_balance = GLOBAL_BALANCE
+                new_balance = client.get_balance(raw=False)
+                GLOBAL_BALANCE = new_balance
+                _last_balance_check = time.time()
+                print(f"[Balance] Refreshing balance... OLD: {old_balance:.2f} → NEW: {new_balance:.2f}")
+        except Exception as e:
+            print(f"[Balance] Auto-refresh failed: {e}")
+        time.sleep(480)
 
 @retry(
     wait=wait_fixed(1),
@@ -69,63 +91,67 @@ def safe_close_position(client: CapitalClient, deal_id: str):
         raise
 
 def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list: list[str]):
-    print(f"[Strategy {strategy_id}] Webhook received")
-    try:
-        symbol_name = payload_list[0]
-        direction = payload_list[1].upper()
-        mainLot = payload_list[2]
-        takeprofit = int(payload_list[3])
-        stoploss = int(payload_list[4])
-        action = payload_list[5]
-        isInvert = payload_list[6]
+    with lock:
+        print(f"[Strategy {strategy_id}] Webhook received")
+        try:
+            symbol_name = payload_list[0]
+            direction = payload_list[1].upper()
+            mainLot = payload_list[2]
+            takeprofit = int(payload_list[3])
+            stoploss = int(payload_list[4])
+            action = payload_list[5]
+            isInvert = payload_list[6]
 
-        if not hasattr(client, "open_positions"):
-            client.open_positions = {}
+            if not hasattr(client, "open_positions"):
+                client.open_positions = {}
 
-        if action == "close":
-            if symbol_name in client.open_positions and client.open_positions[symbol_name]:
-                deal_ids = client.open_positions[symbol_name]
-                print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
-                for deal_id in deal_ids:
-                    try:
-                        safe_close_position(client, deal_id)
-                        print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
-                    except Exception as e:
-                        print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
-                client.open_positions[symbol_name] = []
-            else:
-                print(f"[Strategy {strategy_id}] No open positions recorded for {symbol_name} to close.")
-
-        elif action == "open":
-            if isInvert == "Invert":
-                if direction == 'BUY':
-                    direction = 'SELL'
-                elif direction == 'SELL':
-                    direction = 'BUY'
-                else:
-                    raise ValueError(f"Unknown direction: {direction}")
-
-            balance = client.get_balance(raw=False)
-            minilot, per = map(float, mainLot.split('/'))
-            raw_lot = (balance / per) * minilot
-            lot = round(raw_lot, 3)
-
-            if lot < 0.001:
-                print(f"[Strategy {strategy_id}] Computed lot {lot} is too small, setting to 0.001")
-                lot = 0.001
-
-            try:
-                deal_id = safe_open_position(client, symbol_name, lot, direction, stoploss, takeprofit)
-                print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id} | SL: {stoploss} | TP: {takeprofit}")
-                if symbol_name not in client.open_positions:
+            if action == "close":
+                if symbol_name in client.open_positions and client.open_positions[symbol_name]:
+                    deal_ids = client.open_positions[symbol_name]
+                    print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
+                    for deal_id in list(deal_ids):
+                        try:
+                            safe_close_position(client, deal_id)
+                            print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
+                            client.open_positions[symbol_name].remove(deal_id)
+                        except Exception as e:
+                            print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
                     client.open_positions[symbol_name] = []
-                client.open_positions[symbol_name].append(deal_id)
-            except Exception as e:
-                print(f"[Strategy {strategy_id}] Failed to open position: {e}")
-        else:
-            print(f"[Strategy {strategy_id}] Unknown action: {action}")
-    except Exception as e:
-        print(f"[Strategy {strategy_id}] ERROR: {e}")
+                else:
+                    print(f"[Strategy {strategy_id}] No open positions recorded for {symbol_name} to close.")
+
+            elif action == "open":
+                if isInvert == "Invert":
+                    if direction == 'BUY':
+                        direction = 'SELL'
+                    elif direction == 'SELL':
+                        direction = 'BUY'
+                    else:
+                        raise ValueError(f"Unknown direction: {direction}")
+
+                with balance_lock:
+                    balance = GLOBAL_BALANCE
+
+                minilot, per = map(float, mainLot.split('/'))
+                raw_lot = (balance / per) * minilot
+                lot = round(raw_lot, 3)
+
+                if lot < 0.001:
+                    print(f"[Strategy {strategy_id}] Computed lot {lot} is too small, setting to 0.001")
+                    lot = 0.001
+
+                try:
+                    deal_id = safe_open_position(client, symbol_name, lot, direction, stoploss, takeprofit)
+                    print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id} | SL: {stoploss} | TP: {takeprofit}")
+                    if symbol_name not in client.open_positions:
+                        client.open_positions[symbol_name] = []
+                    client.open_positions[symbol_name].append(deal_id)
+                except Exception as e:
+                    print(f"[Strategy {strategy_id}] Failed to open position: {e}")
+            else:
+                print(f"[Strategy {strategy_id}] Unknown action: {action}")
+        except Exception as e:
+            print(f"[Strategy {strategy_id}] ERROR: {e}")
 
 def register_strategy_endpoint(strategy_id: int, route_path: str, client: CapitalClient):
     strategy_urls[strategy_id] = route_path
@@ -177,8 +203,12 @@ def main():
     elif current_count > args.Strategies:
         print(f"Found more links than requested ({current_count} > {args.Strategies}). Extra links will be ignored.")
 
+    client = create_client(args.api_key, args.login, args.password, args.demo)
+
+    # start global balance refresh thread
+    threading.Thread(target=refresh_balance_periodically, args=(client,), daemon=True).start()
+
     for i, route in enumerate(routes[:args.Strategies], start=1):
-        client = create_client(args.api_key, args.login, args.password, args.demo)
         register_strategy_endpoint(i, route, client)
         print(f"Strategy {i} registered.")
 
