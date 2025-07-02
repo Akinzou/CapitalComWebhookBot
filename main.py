@@ -1,5 +1,6 @@
 import threading
 import time
+from queue import Queue
 
 from fastapi import FastAPI, Request
 from capitalcom import CapitalClient
@@ -12,14 +13,15 @@ import os
 
 app = FastAPI()
 lock = threading.Lock()
-clients = {}
 strategy_urls = {}
 LINKS_FILE = "webhook_links.txt"
 
 # === GLOBAL BALANCE STATE ===
 GLOBAL_BALANCE = 0.0
 _last_balance_check = 0
-balance_lock = threading.Lock()
+
+# === Kolejka zadań otwierania pozycji ===
+position_queue = Queue()
 
 class LoginRateLimitError(Exception):
     pass
@@ -27,11 +29,7 @@ class LoginRateLimitError(Exception):
 class RateLimitError(Exception):
     pass
 
-@retry(
-    wait=wait_fixed(1),
-    stop=stop_after_attempt(10),
-    retry=retry_if_exception_type(LoginRateLimitError)
-)
+@retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(LoginRateLimitError))
 def create_client(api_key, login, password, demo):
     try:
         client = CapitalClient(
@@ -40,6 +38,7 @@ def create_client(api_key, login, password, demo):
             password=password,
             demo=demo
         )
+        # Zmieniamy strukturę na: {strategy_id: {symbol: [deal_id, ...]}}
         client.open_positions = {}
         return client
     except Exception as e:
@@ -52,43 +51,40 @@ def refresh_balance_periodically(client: CapitalClient):
     global GLOBAL_BALANCE, _last_balance_check
     while True:
         try:
-            with balance_lock:
-                old_balance = GLOBAL_BALANCE
-                new_balance = client.get_balance(raw=False)
-                GLOBAL_BALANCE = new_balance
-                _last_balance_check = time.time()
-                print(f"[Balance] Refreshing balance... OLD: {old_balance:.2f} → NEW: {new_balance:.2f}")
+            old_balance = GLOBAL_BALANCE
+            new_balance = client.get_balance(raw=False)
+            GLOBAL_BALANCE = new_balance
+            _last_balance_check = time.time()
+            print(f"[Balance] Refreshing balance... OLD: {old_balance:.2f} → NEW: {new_balance:.2f}")
         except Exception as e:
             print(f"[Balance] Auto-refresh failed: {e}")
         time.sleep(480)
 
-@retry(
-    wait=wait_fixed(1),
-    stop=stop_after_attempt(10),
-    retry=retry_if_exception_type(RateLimitError)
-)
+@retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(RateLimitError))
 def safe_open_position(client: CapitalClient, symbol: str, lot: float, direction: str, sl: int, tp: int) -> str:
-    try:
-        return client.open_forex_position(symbol, lot, direction, sl, tp)
-    except Exception as e:
-        if "429" in str(e):
-            print(f"[RETRY] Rate limited while opening position for {symbol}. Retrying...")
-            raise RateLimitError()
-        raise
+    return client.open_forex_position(symbol, lot, direction, sl, tp)
 
-@retry(
-    wait=wait_fixed(1),
-    stop=stop_after_attempt(10),
-    retry=retry_if_exception_type(RateLimitError)
-)
+@retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(RateLimitError))
 def safe_close_position(client: CapitalClient, deal_id: str):
-    try:
-        client.close_position_by_id(deal_id)
-    except Exception as e:
-        if "429" in str(e):
-            print(f"[RETRY] Rate limited while closing deal {deal_id}. Retrying...")
-            raise RateLimitError()
-        raise
+    client.close_position_by_id(deal_id)
+
+def position_worker(client: CapitalClient):
+    while True:
+        task = position_queue.get()
+        if task is None:
+            break
+        strategy_id, symbol, lot, direction, sl, tp = task
+        try:
+            deal_id = safe_open_position(client, symbol, lot, direction, sl, tp)
+            print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id}")
+            if strategy_id not in client.open_positions:
+                client.open_positions[strategy_id] = {}
+            if symbol not in client.open_positions[strategy_id]:
+                client.open_positions[strategy_id][symbol] = []
+            client.open_positions[strategy_id][symbol].append(deal_id)
+        except Exception as e:
+            print(f"[Strategy {strategy_id}] Failed to open position: {e}")
+        position_queue.task_done()
 
 def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list: list[str]):
     with lock:
@@ -106,32 +102,28 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
                 client.open_positions = {}
 
             if action == "close":
-                if symbol_name in client.open_positions and client.open_positions[symbol_name]:
-                    deal_ids = client.open_positions[symbol_name]
+                if (strategy_id in client.open_positions and
+                    symbol_name in client.open_positions[strategy_id] and
+                    client.open_positions[strategy_id][symbol_name]):
+
+                    deal_ids = client.open_positions[strategy_id][symbol_name]
                     print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
                     for deal_id in list(deal_ids):
                         try:
                             safe_close_position(client, deal_id)
                             print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
-                            client.open_positions[symbol_name].remove(deal_id)
+                            client.open_positions[strategy_id][symbol_name].remove(deal_id)
                         except Exception as e:
                             print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
-                    client.open_positions[symbol_name] = []
+                    client.open_positions[strategy_id][symbol_name] = []
                 else:
                     print(f"[Strategy {strategy_id}] No open positions recorded for {symbol_name} to close.")
 
             elif action == "open":
                 if isInvert == "Invert":
-                    if direction == 'BUY':
-                        direction = 'SELL'
-                    elif direction == 'SELL':
-                        direction = 'BUY'
-                    else:
-                        raise ValueError(f"Unknown direction: {direction}")
+                    direction = 'SELL' if direction == 'BUY' else 'BUY'
 
-                with balance_lock:
-                    balance = GLOBAL_BALANCE
-
+                balance = GLOBAL_BALANCE
                 minilot, per = map(float, mainLot.split('/'))
                 raw_lot = (balance / per) * minilot
                 lot = round(raw_lot, 3)
@@ -140,14 +132,8 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
                     print(f"[Strategy {strategy_id}] Computed lot {lot} is too small, setting to 0.001")
                     lot = 0.001
 
-                try:
-                    deal_id = safe_open_position(client, symbol_name, lot, direction, stoploss, takeprofit)
-                    print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id} | SL: {stoploss} | TP: {takeprofit}")
-                    if symbol_name not in client.open_positions:
-                        client.open_positions[symbol_name] = []
-                    client.open_positions[symbol_name].append(deal_id)
-                except Exception as e:
-                    print(f"[Strategy {strategy_id}] Failed to open position: {e}")
+                position_queue.put((strategy_id, symbol_name, lot, direction, stoploss, takeprofit))
+                print(f"[Strategy {strategy_id}] Queued position for {symbol_name} {direction} lot={lot}")
             else:
                 print(f"[Strategy {strategy_id}] Unknown action: {action}")
         except Exception as e:
@@ -205,15 +191,14 @@ def main():
 
     client = create_client(args.api_key, args.login, args.password, args.demo)
 
-    # start global balance refresh thread
     threading.Thread(target=refresh_balance_periodically, args=(client,), daemon=True).start()
+    threading.Thread(target=position_worker, args=(client,), daemon=True).start()
 
     for i, route in enumerate(routes[:args.Strategies], start=1):
         register_strategy_endpoint(i, route, client)
         print(f"Strategy {i} registered.")
 
     print(AsciiAlerts.RED + AsciiAlerts.ascii_art_url + AsciiAlerts.RESET)
-
     for sid, url in strategy_urls.items():
         print(f"Strategy {sid}: POST http://localhost:{args.port}{url.lstrip()}")
 
