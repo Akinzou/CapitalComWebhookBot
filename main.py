@@ -60,14 +60,6 @@ def refresh_balance_periodically(client: CapitalClient):
             print(f"[Balance] Auto-refresh failed: {e}")
         time.sleep(480)
 
-@retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(RateLimitError))
-def safe_open_position(client: CapitalClient, symbol: str, lot: float, direction: str, sl: int, tp: int) -> str:
-    return client.open_forex_position(symbol, lot, direction, sl, tp)
-
-@retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(RateLimitError))
-def safe_close_position(client: CapitalClient, deal_id: str):
-    client.close_position_by_id(deal_id)
-
 def position_worker(client: CapitalClient):
     while True:
         task = position_queue.get()
@@ -75,7 +67,7 @@ def position_worker(client: CapitalClient):
             break
         strategy_id, symbol, lot, direction, sl, tp = task
         try:
-            deal_id = safe_open_position(client, symbol, lot, direction, sl, tp)
+            deal_id = client.open_forex_position(symbol, lot, direction, sl, tp)
             print(f"[Strategy {strategy_id}] Deal opened. Deal ID: {deal_id}")
             if strategy_id not in client.open_positions:
                 client.open_positions[strategy_id] = {}
@@ -110,7 +102,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
                     print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
                     for deal_id in list(deal_ids):
                         try:
-                            safe_close_position(client, deal_id)
+                            client.close_position_by_id(deal_id)
                             print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
                             client.open_positions[strategy_id][symbol_name].remove(deal_id)
                         except Exception as e:
@@ -193,7 +185,6 @@ def main():
 
     threading.Thread(target=refresh_balance_periodically, args=(client,), daemon=True).start()
     threading.Thread(target=position_worker, args=(client,), daemon=True).start()
-
     for i, route in enumerate(routes[:args.Strategies], start=1):
         register_strategy_endpoint(i, route, client)
         print(f"Strategy {i} registered.")
@@ -203,6 +194,7 @@ def main():
         print(f"Strategy {sid}: POST http://localhost:{args.port}{url.lstrip()}")
 
     uvicorn.run(app, host="0.0.0.0", port=args.port)
+
 
 if __name__ == "__main__":
     main()
