@@ -29,6 +29,17 @@ class LoginRateLimitError(Exception):
 class RateLimitError(Exception):
     pass
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected (e.g., --demo True or --demo False).')
+
+
 @retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(LoginRateLimitError))
 def create_client(api_key, login, password, demo):
     try:
@@ -162,7 +173,9 @@ def main():
     parser.add_argument("--api_key", required=True, help="Capital.com API key")
     parser.add_argument("--login", required=True, help="Capital.com account login (email)")
     parser.add_argument("--password", required=True, help="Capital.com account password")
-    parser.add_argument("--demo", type=bool, default=True, required=True, help="Use demo account: True or False")
+    parser.add_argument("--demo", type=str2bool, default=True, required=True,
+                        help="Use demo account: True or False")
+
     parser.add_argument("--port", type=int, required=True, help="Port to run FastAPI server on")
 
     args = parser.parse_args()
@@ -191,8 +204,13 @@ def main():
         print(f"Strategy {i} registered.")
 
     print(AsciiAlerts.RED + AsciiAlerts.ascii_art_url + AsciiAlerts.RESET)
+
+    print(f"\033[91m[WARNING] Using {'DEMO' if args.demo else 'LIVE'} environment\033[0m\n")
+
     for sid, url in strategy_urls.items():
         print(f"Strategy {sid}: POST http://localhost:{args.port}{url.lstrip()}")
+
+
 
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
