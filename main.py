@@ -32,12 +32,15 @@ class RateLimitError(Exception):
 def str2bool(v):
     if isinstance(v, bool):
         return v
+    if not v:  # pusty string, None itp.
+        return True
     if v.lower() in ('yes', 'true', 't', '1'):
         return True
     elif v.lower() in ('no', 'false', 'f', '0'):
         return False
     else:
-        raise argparse.ArgumentTypeError('Boolean value expected (e.g., --demo True or --demo False).')
+        raise argparse.ArgumentTypeError('Boolean value expected (True or False).')
+
 
 
 @retry(wait=wait_fixed(1), stop=stop_after_attempt(10), retry=retry_if_exception_type(LoginRateLimitError))
@@ -173,7 +176,7 @@ def main():
     parser.add_argument("--api_key", required=True, help="Capital.com API key")
     parser.add_argument("--login", required=True, help="Capital.com account login (email)")
     parser.add_argument("--password", required=True, help="Capital.com account password")
-    parser.add_argument("--demo", type=str2bool, default=True, required=True,
+    parser.add_argument("--demo", type=str2bool, default=True,
                         help="Use demo account: True or False")
 
     parser.add_argument("--port", type=int, required=True, help="Port to run FastAPI server on")
