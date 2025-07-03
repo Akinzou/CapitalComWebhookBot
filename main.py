@@ -208,7 +208,7 @@ def main():
     print(f"\033[91m[WARNING] Using {'DEMO' if args.demo else 'LIVE'} environment\033[0m\n")
 
     for sid, url in strategy_urls.items():
-        print(f"Strategy {sid}: POST http://localhost:{args.port}{url.lstrip()}")
+        print(f"Strategy {sid}: POST https://localhost{url.lstrip()}")
 
 
 
