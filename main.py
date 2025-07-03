@@ -85,6 +85,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
             symbol_name = payload_list[0]
             direction = payload_list[1].upper()
             mainLot = payload_list[2]
+            mainLot = payload_list[2]
             takeprofit = int(payload_list[3])
             stoploss = int(payload_list[4])
             action = payload_list[5]
