@@ -34,7 +34,7 @@ It is designed to run as a background service on Linux (including WSL) using `sy
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/YourUsername/CapitalWebhookBot.git
+git clone https://github.com/Akinzou/CapitalWebhookBot
 cd CapitalWebhookBot
 ```
 
