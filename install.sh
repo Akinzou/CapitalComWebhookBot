@@ -4,7 +4,7 @@
 SERVICE_NAME="CapitalWebhookBot"
 START_SCRIPT="start_webhook.sh"
 PYTHON_BIN="python3"
-VENV_DIR="venv"  # <-- Dodane
+VENV_DIR="venv"
 
 # ===== PROJECT DIRECTORY =====
 PROJECT_DIR="$(cd "$(dirname "$0")"; pwd)"
@@ -22,18 +22,16 @@ DEMO=${DEMO:-True}
 read -p "Port to listen on [default: 8080]: " PORT
 PORT=${PORT:-8080}
 
-# ===== CREATE & ACTIVATE VENV =====
+# ===== CREATE & USE VENV =====
 if [ ! -d "$PROJECT_DIR/$VENV_DIR" ]; then
   echo "Creating Python virtual environment..."
   $PYTHON_BIN -m venv "$PROJECT_DIR/$VENV_DIR"
 fi
 
-source "$PROJECT_DIR/$VENV_DIR/bin/activate"
-
 # ===== INSTALL DEPENDENCIES =====
 echo "Installing Python dependencies from requirements.txt..."
-pip install --upgrade pip
-pip install -r "$PROJECT_DIR/requirements.txt"
+"$PROJECT_DIR/$VENV_DIR/bin/pip" install --upgrade pip
+"$PROJECT_DIR/$VENV_DIR/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
 
 # ===== GENERATE START SCRIPT =====
 echo "Generating $START_SCRIPT..."
