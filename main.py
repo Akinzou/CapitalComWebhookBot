@@ -192,7 +192,7 @@ def main():
 
     print(AsciiAlerts.RED + AsciiAlerts.ascii_art_url + AsciiAlerts.RESET)
     for sid, url in strategy_urls.items():
-        print(f"Strategy {sid}: POST http://localhost:{args.port}{url.lstrip()}")
+        print(f"Strategy {sid}: POST https://localhost{url.lstrip()}")
 
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
