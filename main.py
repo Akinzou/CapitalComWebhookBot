@@ -128,7 +128,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
 
             elif action == "open":
                 if isInvert == "Invert":
-                    direction = 'sell' if direction == 'buy' else 'buy'
+                    direction = 'SELL' if direction == 'BUY' else 'BUY'
 
                 balance = GLOBAL_BALANCE
                 minilot, per = map(float, mainLot.split('/'))
@@ -139,7 +139,7 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
                     print(f"[Strategy {strategy_id}] Computed lot {lot} is too small, setting to 0.001")
                     lot = 0.001
 
-                position_queue.put((strategy_id, symbol_name, lot, direction.upper(), stoploss, takeprofit))
+                position_queue.put((strategy_id, symbol_name, lot, direction, stoploss, takeprofit))
                 print(f"[Strategy {strategy_id}] Queued position for {symbol_name} {direction} lot={lot}")
             else:
                 print(f"[Strategy {strategy_id}] Unknown action: {action}")
