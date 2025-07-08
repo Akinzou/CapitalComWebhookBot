@@ -108,25 +108,24 @@ def handle_position_normal(client: CapitalClient, strategy_id: int, payload_list
             if not hasattr(client, "open_positions"):
                 client.open_positions = {}
 
-            if action == "close":
-                if (strategy_id in client.open_positions and
-                    symbol_name in client.open_positions[strategy_id] and
-                    client.open_positions[strategy_id][symbol_name]):
+            if (strategy_id in client.open_positions and
+                symbol_name in client.open_positions[strategy_id] and
+                client.open_positions[strategy_id][symbol_name]):
 
-                    deal_ids = client.open_positions[strategy_id][symbol_name]
-                    print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
-                    for deal_id in list(deal_ids):
-                        try:
-                            client.close_position_by_id(deal_id)
-                            print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
-                            client.open_positions[strategy_id][symbol_name].remove(deal_id)
-                        except Exception as e:
-                            print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
-                    client.open_positions[strategy_id][symbol_name] = []
-                else:
-                    print(f"[Strategy {strategy_id}] No open positions recorded for {symbol_name} to close.")
+                deal_ids = client.open_positions[strategy_id][symbol_name]
+                print(f"[Strategy {strategy_id}] Closing {len(deal_ids)} position(s) on {symbol_name}")
+                for deal_id in list(deal_ids):
+                    try:
+                        client.close_position_by_id(deal_id)
+                        print(f"[Strategy {strategy_id}] Closed deal {deal_id}")
+                        client.open_positions[strategy_id][symbol_name].remove(deal_id)
+                    except Exception as e:
+                        print(f"[Strategy {strategy_id}] Failed to close deal {deal_id}: {e}")
+                client.open_positions[strategy_id][symbol_name] = []
+            else:
+                print(f"[Strategy {strategy_id}] No open positions recorded for {symbol_name} to close.")
 
-            elif action == "open":
+            if action == "open":
                 if isInvert == "Invert":
                     direction = 'SELL' if direction == 'BUY' else 'BUY'
 
